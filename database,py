@@ -1,0 +1,83 @@
+import sqlite3
+from datetime import datetime
+
+DB_NAME = "trading_bot.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    
+    # Table for equity curve over time
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS equity_history (
+            timestamp TEXT PRIMARY KEY,
+            equity REAL,
+            cash REAL
+        )
+    ''')
+    
+    # Table for active positions (Holding Name, Qty, Cost Basis, Premium)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS positions (
+            symbol TEXT PRIMARY KEY,
+            asset_type TEXT,
+            qty REAL,
+            avg_entry_price REAL,
+            current_price REAL,
+            premium_collected REAL
+        )
+    ''')
+    
+    # Table for trade execution logs
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trade_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            action TEXT,
+            symbol TEXT,
+            qty REAL,
+            details TEXT
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+def log_equity(equity, cash):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("INSERT OR REPLACE INTO equity_history (timestamp, equity, cash) VALUES (?, ?, ?)", (timestamp, equity, cash))
+    conn.commit()
+    conn.close()
+
+def log_trade(action, symbol, qty, details):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("INSERT INTO trade_logs (timestamp, action, symbol, qty, details) VALUES (?, ?, ?, ?, ?)", 
+                   (timestamp, action, symbol, qty, details))
+    conn.commit()
+    conn.close()
+
+def update_positions_table(client_positions):
+    """Syncs live positions from Alpaca into SQLite so the dashboard shows exact holdings."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM positions")  # Refresh active positions list
+    
+    for p in client_positions:
+        symbol = p.symbol
+        asset_type = p.asset_class.value if hasattr(p.asset_class, 'value') else str(p.asset_class)
+        qty = float(p.qty)
+        avg_price = float(p.avg_entry_price)
+        curr_price = float(p.current_price) if p.current_price else avg_price
+        premium = abs(qty * avg_price) if qty < 0 else 0.0  # Estimated credit for short options
+        
+        cursor.execute('''
+            INSERT OR REPLACE INTO positions (symbol, asset_type, qty, avg_entry_price, current_price, premium_collected)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (symbol, asset_type, qty, avg_price, curr_price, premium))
+        
+    conn.commit()
+    conn.close()
